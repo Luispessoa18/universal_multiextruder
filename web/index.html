@@ -37,9 +37,11 @@ label.f{display:grid;gap:3px;font-size:13px;color:var(--mut)}
 .form{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
 pre{margin:0;background:var(--code);border-radius:8px;padding:10px;height:320px;overflow:auto;font:12px/1.4 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
 .files{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:6px;max-height:260px;overflow:auto}
-.files li{display:flex;gap:8px;align-items:center;padding:6px 8px;border-radius:8px;background:var(--code)}
+.files li{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;padding:6px 8px;border-radius:8px;background:var(--code)}
 .files li.sel{outline:2px solid var(--acc)}
-.files li span{flex:1;overflow-wrap:anywhere;cursor:pointer}
+.files li span{flex:1 1 100%;overflow-wrap:anywhere;cursor:pointer}
+#queue li span{flex:1 1 auto}
+.files small{flex:1 1 auto}
 .files small{color:var(--mut)}
 .warn{color:var(--warn);font-size:13px}
 .sw{width:28px;height:28px;border-radius:6px;border:1px solid var(--line);flex:none}
@@ -143,6 +145,67 @@ input[type=color]{width:44px;height:32px;padding:2px}
   </section>
 
   <section class="card wide">
+    <h2>Fila de impressão</h2>
+    <ol id="queue" class="files" style="padding-left:0"></ol>
+    <div class="row" style="margin-top:10px">
+      <button id="qSim">Simular próximo</button>
+      <button id="qLive" class="pri">Imprimir próximo (real)</button>
+      <span style="color:var(--mut);font-size:13px">Usa a confirmação do card Controle. Retire a peça da mesa antes de iniciar o próximo.</span>
+    </div>
+  </section>
+
+  <section class="card wide" id="testCard">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <h2 style="margin:0">Modo teste · extrusoras e troca</h2>
+      <div class="row"><button id="tOpen" class="pri">Conectar</button><button id="tClose">Desconectar</button></div>
+    </div>
+    <p style="margin:0 0 12px;color:var(--mut);font-size:13px">Abre as duas portas sem imprimir. Troca de verdade (T0↔T1) exige hotend quente e a caixa de confirmação do card Controle marcada <b>antes</b> de conectar. Ao desconectar, os aquecedores são desligados.</p>
+    <div class="grid" style="margin-top:0">
+      <div class="stat"><b>Carregada</b><span id="tTool">—</span></div>
+      <div class="stat"><b>T0 posição / estac. / alvo</b><span id="tPos0">—</span></div>
+      <div class="stat"><b>T1 posição / estac. / alvo</b><span id="tPos1">—</span></div>
+    </div>
+    <h2 style="margin-top:14px">Impressora</h2>
+    <div class="row">
+      <button data-t="home">Home (G28)</button>
+      <label class="row" style="gap:4px">Bico <input id="tHot" type="number" value="210" style="width:80px"></label>
+      <label class="row" style="gap:4px">Mesa <input id="tBed" type="number" value="60" style="width:80px"></label>
+      <button data-t="heat">Aquecer</button><button data-t="cool">Desligar aquecimento</button>
+    </div>
+    <h2 style="margin-top:14px">Mover filamento</h2>
+    <div class="row">
+      <select id="tMvTool"><option value="T0">T0 · impressora</option><option value="T1">T1 · Arduino</option></select>
+      <button data-mv="-50">−50</button><button data-mv="-10">−10</button><button data-mv="10">+10</button><button data-mv="50">+50</button>
+      <input id="tMm" type="number" value="105" style="width:90px"><button data-mv="custom">Mover mm</button>
+    </div>
+    <p class="warn">T0 frio: a Vyper recusa extrudar abaixo de ~170 °C. Para mover T0 frio (filamento fora do hotend), envie <code>M302 P1</code> no console e depois <code>M302 P0</code>.</p>
+    <h2 style="margin-top:14px">Troca de verdade</h2>
+    <div class="row">
+      <button data-ch="T0">Trocar para T0</button><button data-ch="T1">Trocar para T1</button>
+      <span style="color:var(--mut);font-size:13px">Estado real agora:</span>
+      <select id="tReset"><option value="T0">T0 carregado</option><option value="T1">T1 carregado</option><option value="none">nenhum (ambos estacionados)</option></select>
+      <button id="tResetBtn">Definir</button>
+    </div>
+    <h2 style="margin-top:14px">Calibrar T1 (passos/mm)</h2>
+    <div class="row">
+      <button id="tCal">Avançar T1 100 mm</button>
+      <label class="row" style="gap:4px">medido <input id="tCalMm" type="number" step="0.1" style="width:90px"> mm</label>
+      <button id="tCalSave">Calcular e salvar</button><span id="tCalOut" style="font-size:13px"></span>
+    </div>
+    <h2 style="margin-top:14px">Console</h2>
+    <div class="row">
+      <select id="tDev"><option value="gcode">Vyper (G-code)</option><option value="mmu">Arduino (PING, S, INV, F10…)</option></select>
+      <input id="tCmd" placeholder="ex.: M105, M302 P1, S" style="flex:1;min-width:160px"><button id="tSend">Enviar</button>
+    </div>
+    <h2 style="margin-top:14px">Peça de teste 2 cores</h2>
+    <p style="margin:0 0 8px;color:var(--mut);font-size:13px">T0 imprime um círculo de 10 mm, sobe e faz home X/Y, troca para T1 (recuo e avanço pela geometria), purga, faz o círculo do T1 e volta para T0. <b>Real</b>: troca física e purga de verdade; o círculo do T1 é só contorno sem extrusão (T1 com movimento + extrusão é bloqueado). <b>Simulação</b>: completa, com quadrado de purga e círculo do T1.</p>
+    <div class="row">
+      <button id="tpReal" class="pri">Gerar teste real → fila</button>
+      <button id="tpSim">Gerar teste simulação → fila</button>
+    </div>
+  </section>
+
+  <section class="card wide">
     <h2>Ajustes ao vivo</h2>
     <p style="margin:0 0 12px;color:var(--mut);font-size:13px">Enviados à impressora entre comandos (M220 velocidade, M221 fluxo, M106 ventoinha, M104/M140 temperaturas). Aceleração e jerk ficam sempre no padrão do firmware. Comandos do próprio G-code (ex.: M106 a cada camada, M104 de troca de temperatura) podem sobrescrever o ajuste.</p>
     <div class="form" id="adjust"></div>
@@ -185,9 +248,9 @@ input[type=color]{width:44px;height:32px;padding:2px}
 </main>
 <script>
 const $=id=>document.getElementById(id);
-const RUN=new Set(['preflight','connecting','running','paused']);
-const LABEL={idle:'Ocioso',preflight:'Pré-validação',connecting:'Conectando',running:'Executando',paused:'Pausado',done:'Concluído',stopped:'Parado',error:'Erro'};
-const COLOR={idle:'var(--mut)',preflight:'var(--warn)',connecting:'var(--warn)',running:'var(--acc)',paused:'var(--warn)',done:'var(--ok)',stopped:'var(--warn)',error:'var(--bad)'};
+const RUN=new Set(['preflight','connecting','running','paused','test-connecting','test']);
+const LABEL={idle:'Ocioso',preflight:'Pré-validação',connecting:'Conectando',running:'Executando',paused:'Pausado',done:'Concluído',stopped:'Parado',error:'Erro','test-connecting':'Teste: conectando',test:'Modo teste'};
+const COLOR={idle:'var(--mut)',preflight:'var(--warn)',connecting:'var(--warn)',running:'var(--acc)',paused:'var(--warn)',done:'var(--ok)',stopped:'var(--warn)',error:'var(--bad)','test-connecting':'var(--warn)',test:'var(--acc)'};
 const FIELDS=[
   ['printer_port','Porta da impressora (T0)','port'],['printer_baud','Baud impressora'],
   ['mmu_port','Porta do Arduino (T1)','port'],['mmu_baud','Baud Arduino'],
@@ -203,7 +266,8 @@ async function api(path,opts={}){
   const r=await fetch(path,opts);let d={};try{d=await r.json()}catch(_){}
   if(!r.ok)throw new Error(d.error||r.status+' '+r.statusText);return d;
 }
-let profiles=[],prof=null;
+let profiles=[],prof=null,queueItems=[],lastState=null;
+function fmtPos(n,v){const f=$('settings').elements;return (v==null?'—':(+v).toFixed(1))+' / '+f['p'+n].value+' / '+f['l'+n].value}
 const ADJ=[['speed','Velocidade (%)',10,300,100],['flow','Fluxo T0 (%)',50,150,100],['fan','Ventoinha (%)',0,100,100],['hotend','Hotend (°C)',0,null,200],['bed','Mesa (°C)',0,null,60]];
 const M503={M92:'Passos/mm',M203:'Velocidade máx. (mm/s)',M201:'Aceleração máx. (mm/s²)',M204:'Aceleração (P impressão · R retração · T deslocamento)',M205:'Jerk / junction deviation',M206:'Offset do home',M851:'Z-offset da sonda',M301:'PID do hotend',M304:'PID da mesa',M420:'Nivelamento (malha)',M900:'Linear advance',M145:'Pré-aquecimento',M413:'Recuperação de queda de energia',M200:'Diâmetro do filamento',M149:'Unidade de temperatura',M907:'Corrente dos motores',M906:'Corrente dos motores (TMC)'};
 const post=(p,body)=>api(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
@@ -240,6 +304,10 @@ function render(d){
   $('flow').textContent=d.file?d.flow_factor+' %':'—';
   $('fan').textContent=d.fan==null?'—':d.fan+' %';
   $('profname').textContent=d.profile||(prof?prof.name:'—');
+  if(d.positions){$('tPos0').textContent=fmtPos('0',d.positions.T0);$('tPos1').textContent=fmtPos('1',d.positions.T1)}
+  $('tTool').textContent=(d.state||'').startsWith('test')?(d.tool||'nenhuma'):'—';
+  if(lastState&&RUN.has(lastState)&&!RUN.has(d.state))loadQueue();
+  lastState=d.state;
   document.title=(RUN.has(d.state)?p.toFixed(0)+'% · ':'')+'Universal Multiextruder';
   updateButtons();
 }
@@ -248,7 +316,12 @@ function updateButtons(){
   $('btnSim').disabled=running||!has;
   $('btnLive').disabled=running||!has||!$('confirm').checked;
   $('btnPause').disabled=!running;$('btnStop').disabled=!running;
-  document.querySelectorAll('#adjust button').forEach(b=>b.disabled=!running);
+  const testing=st&&st.state==='test', job=running&&!(st.state||'').startsWith('test');
+  document.querySelectorAll('#adjust button').forEach(b=>b.disabled=!job);
+  document.querySelectorAll('#testCard [data-t],#testCard [data-mv],#testCard [data-ch],#tResetBtn,#tCal,#tSend').forEach(b=>b.disabled=!testing);
+  $('tOpen').disabled=!!running;$('tClose').disabled=!(st&&(st.state||'').startsWith('test')&&running);
+  $('qSim').disabled=!!running||!queueItems.length;$('qLive').disabled=!!running||!queueItems.length||!$('confirm').checked;
+  $('btnPause').disabled=!job;
   $('btnInfo').disabled=!!running;
   $('btnPause').textContent=st&&st.state==='paused'?'Retomar':'Pausar';
 }
@@ -272,7 +345,9 @@ function renderFiles(list){
     an.onclick=()=>analyze(f.name);
     const del=document.createElement('button');del.textContent='Excluir';
     del.onclick=async()=>{if(!confirm('Excluir '+f.name+'?'))return;try{renderFiles((await api('/api/files/'+encodeURIComponent(f.name),{method:'DELETE'})).files)}catch(e){say(e.message,'err')}};
-    li.append(n,sm,an,del);ul.appendChild(li);
+    const qb=document.createElement('button');qb.textContent='+ Fila';
+    qb.onclick=()=>addQueue(f.name);if(/\.3mf$/i.test(f.name))qb.style.display='none';
+    li.append(n,sm,an,qb,del);ul.appendChild(li);
   }
   updateButtons();
 }
@@ -422,12 +497,62 @@ $('btnConvert').onclick=async()=>{
     add('Deslocamento XY: '+r.offset.join(' / ')+' mm · área ocupada: X '+r.bbox[0]+'–'+r.bbox[2]+' · Y '+r.bbox[1]+'–'+r.bbox[3]);
     const dr=Object.entries(r.dropped);if(dr.length)add('Removidos (não existem na Vyper): '+dr.map(([k,v])=>k+'×'+v).join(', '));
     for(const w of r.warnings)add('⚠ '+w,'var(--warn)');
+    const row=document.createElement('div');row.className='row';row.style.marginTop='8px';
+    const qa=document.createElement('button');qa.className='pri';qa.textContent='Adicionar à fila de impressão';qa.onclick=()=>addQueue(r.output);
+    row.appendChild(qa);box.appendChild(row);
     const d=await api('/api/files');renderFiles(d.files);$('fileSel').value=r.output;renderFiles(d.files);
   }catch(e){$('mcResult').textContent=e.message;$('mcResult').style.color='var(--bad)'}
   finally{b.disabled=false}
 };
 
+// --- fila ----------------------------------------------------------------------
+function renderQueue(items){
+  queueItems=items;const ol=$('queue');ol.innerHTML='';
+  if(!items.length){const li=document.createElement('li');li.textContent='Fila vazia. Converta um arquivo ou use "+ Fila" na lista de arquivos.';ol.appendChild(li)}
+  items.forEach((it,k)=>{const li=document.createElement('li');
+    const n=document.createElement('span');n.textContent=(k+1)+'. '+it.file;
+    const mk=(t,fn)=>{const b=document.createElement('button');b.textContent=t;b.onclick=fn;return b};
+    li.append(n,mk('↑',()=>qMove(it.id,-1)),mk('↓',()=>qMove(it.id,1)),mk('✕',()=>qDel(it.id)));ol.appendChild(li)});
+  updateButtons();
+}
+async function loadQueue(){try{renderQueue((await api('/api/queue')).queue)}catch(e){say(e.message,'err')}}
+async function addQueue(name){try{renderQueue((await post('/api/queue',{file:name})).queue);say(name+' adicionado à fila','ok')}catch(e){say(e.message,'err')}}
+async function qMove(id,dir){try{renderQueue((await post('/api/queue/'+id+'/move',{dir})).queue)}catch(e){say(e.message,'err')}}
+async function qDel(id){try{renderQueue((await api('/api/queue/'+id,{method:'DELETE'})).queue)}catch(e){say(e.message,'err')}}
+async function qStart(live){
+  if(live&&!confirm('MODO REAL\n\nA mesa está livre e a máquina segura? Imprimir o próximo da fila?'))return;
+  try{await saveSettings();const r=await post('/api/queue/start',{live,confirm:$('confirm').checked});renderQueue(r.queue);say('Iniciado: '+r.started,'ok')}catch(e){say(e.message,'err')}
+}
+$('qSim').onclick=()=>qStart(false);$('qLive').onclick=()=>qStart(true);
+
+// --- modo teste ---------------------------------------------------------------
+const tAct=(action,extra)=>post('/api/test/action',{action,...(extra||{})}).catch(e=>say(e.message,'err'));
+$('tOpen').onclick=async()=>{try{await saveSettings();await post('/api/test/open',{confirm:$('confirm').checked});say('Conectando modo teste...','ok')}catch(e){say(e.message,'err')}};
+$('tClose').onclick=()=>post('/api/test/close').catch(e=>say(e.message,'err'));
+document.querySelectorAll('#testCard [data-t]').forEach(b=>b.onclick=()=>{const t=b.dataset.t;
+  tAct(t,t==='heat'?{hotend:+$('tHot').value,bed:+$('tBed').value}:{})});
+document.querySelectorAll('#testCard [data-mv]').forEach(b=>b.onclick=()=>{
+  const mm=b.dataset.mv==='custom'?+$('tMm').value:+b.dataset.mv;tAct('move',{tool:$('tMvTool').value,mm})});
+document.querySelectorAll('#testCard [data-ch]').forEach(b=>b.onclick=()=>{
+  if(confirm('Troca REAL para '+b.dataset.ch+' com a geometria configurada. Hotend quente e posições conferidas?'))tAct('change',{tool:b.dataset.ch})});
+$('tResetBtn').onclick=()=>tAct('reset',{tool:$('tReset').value});
+$('tSend').onclick=()=>{const v=$('tCmd').value.trim();if(v){tAct($('tDev').value,{line:v});$('tCmd').value=''}};
+$('tCmd').onkeydown=e=>{if(e.key==='Enter')$('tSend').click()};
+$('tCal').onclick=()=>tAct('move',{tool:'T1',mm:100});
+$('tCalSave').onclick=async()=>{
+  const m=+$('tCalMm').value,f=$('settings').elements,old=+f.steps_mm.value;
+  if(!(m>0)){$('tCalOut').textContent='informe quantos mm o T1 andou de verdade';return}
+  const nv=(old*100/m).toFixed(4);f.steps_mm.value=nv;
+  try{await saveSettings();$('tCalOut').textContent='passos/mm: '+old+' → '+nv+' (salvo; vale na próxima conexão)'}catch(e){say(e.message,'err')}
+};
+async function makeTest(variant){
+  try{const r=await post('/api/testprint',{variant,queue:true,hotend:+$('tHot').value,bed:+$('tBed').value});
+    renderFiles(r.files);renderQueue(r.queue);say(r.name+' gerado e adicionado à fila','ok')}catch(e){say(e.message,'err')}
+}
+$('tpReal').onclick=()=>makeTest('real');$('tpSim').onclick=()=>makeTest('sim');
+
 (async()=>{
+  loadQueue();
   try{profiles=(await api('/api/profile')).profiles||[]}catch(_){}
   buildForm();
   await loadSettings().catch(e=>say(e.message,'err'));

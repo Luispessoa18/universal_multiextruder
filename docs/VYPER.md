@@ -101,7 +101,9 @@ Desative no fatiador, porque a ponte recusa estes recursos:
 - **Exclude objects** (`M486`);
 - **Pressure/linear advance** (`M900`).
 
-O G-code inicial do perfil faz home com `G28` e conta com a malha de nivelamento que já está salva na Vyper. Confirme com o M503: a linha `M420` precisa indicar o nivelamento ativo (`S1`). Se não indicar, ou para nivelar de novo antes de cada impressão, acrescente `G29` depois do `G28`. A Vyper nivela pelo sensor de pressão do bico, por isso o bico precisa estar **limpo**.
+O G-code inicial do perfil faz home com `G28` e ativa a malha de nivelamento salva com `M420 S1`. A Vyper desliga o nivelamento no home: no M503 aparece `M420 S0`.
+
+Se não houver malha salva, a Vyper responde `Error:Failed to enable Bed Leveling` e a ponte interrompe antes da primeira camada. Nesse caso, nivele pelo menu da impressora (ela salva a malha) ou troque `M420 S1` por `G29` no perfil para nivelar antes de cada impressão. A Vyper nivela pelo sensor de pressão do bico, por isso o bico precisa estar **limpo**.
 
 ## 5. Limites que a pré-validação confere
 

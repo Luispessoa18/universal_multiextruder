@@ -8,11 +8,12 @@ Variáveis de ambiente:
   MMU_USER      usuário (padrão: admin)
   MMU_HOST / MMU_PORT / MMU_MAX_UPLOAD_MB
 """
-import argparse, hmac, os, re, sys, threading, zipfile
+import argparse, hmac, os, re, sys, threading, time, zipfile
 from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
-import converter, runner
+import json, uuid
+import converter, runner, testprint
 
 ROOT = Path(__file__).resolve().parent
 UPLOADS = ROOT / 'uploads'
@@ -243,6 +244,133 @@ def convert():
     threading.Thread(target=_convert_worker, args=(path, plate['member'], mapping, bool(data.get('center', True)),
                                                    out, len(info['plates'])), daemon=True).start()
     return jsonify(ok=True)
+
+
+# --- modo teste -----------------------------------------------------------------
+@app.post('/api/test/open')
+def test_open():
+    data = request.get_json(force=True) or {}
+    try:
+        job.test_open(runner.load_settings(), bool(data.get('confirm')))
+    except (ValueError, RuntimeError) as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(ok=True)
+
+
+@app.post('/api/test/action')
+def test_action():
+    data = dict(request.get_json(force=True) or {})
+    action = data.pop('action', None)
+    try:
+        job.test_action(action, **data)
+    except (ValueError, RuntimeError, TypeError) as e:
+        return jsonify(error=str(e)), 400
+    return jsonify(ok=True)
+
+
+@app.post('/api/test/close')
+def test_close():
+    if job.status.get('state') in ('test', 'test-connecting'):
+        job.stop()
+    return jsonify(ok=True)
+
+
+@app.post('/api/testprint')
+def make_testprint():
+    data = request.get_json(force=True) or {}
+    variant = data.get('variant', 'real')
+    try:
+        prof = runner.load_profile(runner.load_settings()['profile'])
+        text = testprint.generate(prof, variant, int(data.get('hotend', 210)), int(data.get('bed', 60)),
+                                  float(data.get('diameter', 10)))
+    except (ValueError, TypeError) as e:
+        return jsonify(error=str(e)), 400
+    UPLOADS.mkdir(exist_ok=True)
+    name = f'teste_2cores_{"simulacao" if variant == "sim" else "real"}.gcode'
+    if job.running and job.status.get('file') == name:
+        return jsonify(error='Arquivo em uso pelo trabalho atual'), 409
+    (UPLOADS / name).write_text(text, encoding='utf-8')
+    if data.get('queue'):
+        _queue_add(name)
+    return jsonify(name=name, files=_files(), queue=_queue_load())
+
+
+# --- fila de impressão --------------------------------------------------------------
+QUEUE_PATH = ROOT / 'queue.json'
+_queue_lock = threading.Lock()
+
+
+def _queue_load():
+    try:
+        items = json.loads(QUEUE_PATH.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return []
+    return [i for i in items if (UPLOADS / i.get('file', '')).is_file()]
+
+
+def _queue_save(items):
+    QUEUE_PATH.write_text(json.dumps(items, indent=1, ensure_ascii=False), encoding='utf-8')
+
+
+def _queue_add(name):
+    with _queue_lock:
+        items = _queue_load()
+        items.append({'id': uuid.uuid4().hex[:8], 'file': name, 'added': time.time()})
+        _queue_save(items)
+        return items
+
+
+@app.get('/api/queue')
+def queue_get():
+    return jsonify(queue=_queue_load())
+
+
+@app.post('/api/queue')
+def queue_add():
+    data = request.get_json(force=True) or {}
+    try:
+        path = _upload_path(data.get('file'))
+    except FileNotFoundError as e:
+        return jsonify(error=str(e)), 404
+    if path.suffix.lower() not in GCODE_EXTS:
+        return jsonify(error='Converta o 3MF para Vyper antes de colocar na fila'), 400
+    return jsonify(queue=_queue_add(path.name))
+
+
+@app.delete('/api/queue/<qid>')
+def queue_delete(qid):
+    with _queue_lock:
+        items = [i for i in _queue_load() if i['id'] != qid]
+        _queue_save(items)
+    return jsonify(queue=items)
+
+
+@app.post('/api/queue/<qid>/move')
+def queue_move(qid):
+    d = 1 if (request.get_json(force=True) or {}).get('dir', 1) > 0 else -1
+    with _queue_lock:
+        items = _queue_load()
+        idx = next((k for k, i in enumerate(items) if i['id'] == qid), None)
+        if idx is not None and 0 <= idx + d < len(items):
+            items[idx], items[idx + d] = items[idx + d], items[idx]
+            _queue_save(items)
+    return jsonify(queue=items)
+
+
+@app.post('/api/queue/start')
+def queue_start():
+    data = request.get_json(force=True) or {}
+    with _queue_lock:
+        items = _queue_load()
+        if not items:
+            return jsonify(error='Fila vazia'), 400
+        first = items[0]
+        try:
+            job.start(UPLOADS / first['file'], runner.load_settings(), bool(data.get('live')), bool(data.get('confirm')))
+        except (ValueError, RuntimeError, OSError) as e:
+            return jsonify(error=str(e)), 400
+        _queue_save(items[1:])
+    return jsonify(ok=True, started=first['file'], queue=items[1:])
 
 
 @app.post('/api/adjust')

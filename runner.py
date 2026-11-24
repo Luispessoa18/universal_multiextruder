@@ -30,7 +30,7 @@ DEFAULTS = {
     'l0': 680.0,    # T0 alvo: 540 + 90 + 50
     'p1': 505.0,    # T1 estacionamento: 470 + 45 - 10
     'l1': 610.0,    # T1 alvo: 470 + 90 + 50
-    'native_change_feed': 300,
+    'native_change_feed': 1500,   # mm/min (Vyper: E máx. 60 mm/s)
     'minimum_hotend_c': 180,
     'initial_tool': 'T0',   # T0 | T1 | none
     'profile': 'vyper',     # arquivo profiles/<nome>.json
@@ -40,7 +40,7 @@ DEFAULTS = {
 INTS = ('printer_baud', 'mmu_baud', 'rpm', 'native_change_feed', 'minimum_hotend_c')
 FLOATS = ('steps_mm', 'p0', 'l0', 'p1', 'l1')
 LIVE_CODES = {'G0', 'G1', 'G4', 'G21', 'G28', 'G29', 'G90', 'G91', 'G92', 'M82', 'M83', 'M84', 'M104', 'M105', 'M106',
-              'M107', 'M109', 'M114', 'M115', 'M117', 'M140', 'M190', 'M204', 'M205', 'M400', 'M73', 'T0', 'T1'}
+              'M107', 'M109', 'M114', 'M115', 'M117', 'M140', 'M190', 'M204', 'M205', 'M400', 'M73', 'M420', 'T0', 'T1'}
 PROFILE_DEFAULTS = {'name': 'Genérica', 'bed_mm': {'x': 220, 'y': 220, 'z': 250}, 'bounds_margin_mm': 5,
                     'max_hotend_c': 260, 'max_bed_c': 110, 'strip_codes': ['M201', 'M203', 'M204', 'M205'],
                     'speed_factor': 100, 'flow_factor': 100}
@@ -71,7 +71,8 @@ def load_profile(name='vyper'):
 def list_profiles():
     return sorted(f.stem for f in PROFILE_DIR.glob('*.json'))
 BAMBU_CODES = {'M620', 'M621', 'M622', 'M623', 'M1002'}
-RUNNING_STATES = ('preflight', 'connecting', 'running', 'paused')
+RUNNING_STATES = ('preflight', 'connecting', 'running', 'paused', 'test-connecting', 'test')
+TEST_ACTIONS = ('gcode', 'mmu', 'move', 'change', 'reset', 'home', 'heat', 'cool')
 
 
 def load_settings():
@@ -224,7 +225,7 @@ class Runner:
                     done_cmds=0, total_cmds=0, progress=0.0, layer=0, total_layers=0, tool=None,
                     command='', hotend=None, hotend_target=None, bed=None, bed_target=None,
                     started=None, finished=None, profile=None, stripped={},
-                    speed_factor=100, flow_factor=100, fan=None)
+                    speed_factor=100, flow_factor=100, fan=None, positions=None)
 
     @property
     def running(self):
@@ -263,6 +264,137 @@ class Runner:
     def stop(self):
         if self.running:
             self.stop_ev.set()
+
+    # --- modo teste (conexão manual com as duas placas) ------------------
+    def test_open(self, settings, confirm):
+        if self.running:
+            raise RuntimeError('Ocupado: termine o trabalho ou teste atual')
+        if self._query_lock.locked():
+            raise RuntimeError('Aguarde a leitura da impressora terminar')
+        s = normalize(settings)
+        if s['printer_port'].upper() == s['mmu_port'].upper():
+            raise ValueError('Impressora e Arduino precisam de portas distintas')
+        c = build_config(s, confirm)
+        self._test_q = queue.Queue()
+        self.stop_ev.clear()
+        self.pause_ev.clear()
+        with self._lock:
+            self.status = self._blank()
+            self.status.update(state='test-connecting', message='Conectando para testes...', live=True,
+                               tool=c['initial_tool'], started=time.time())
+        self._thread = threading.Thread(target=self._test_loop, args=(c,), daemon=True)
+        self._thread.start()
+
+    def test_action(self, action, **kw):
+        if not self.running or self.status['state'] not in ('test', 'test-connecting'):
+            raise RuntimeError('Conecte o modo teste primeiro')
+        if action not in TEST_ACTIONS:
+            raise ValueError('Ação de teste desconhecida')
+        if action in ('gcode', 'mmu'):
+            line = str(kw.get('line', '')).strip()
+            if not line or len(line) > 120 or not line.isascii() or '\n' in line:
+                raise ValueError('Comando inválido')
+            kw = {'line': line}
+        elif action == 'move':
+            mm = float(kw.get('mm'))
+            if kw.get('tool') not in TOOLS or not math.isfinite(mm) or not 0 < abs(mm) <= 800:
+                raise ValueError('Movimento inválido (ferramenta T0/T1, até 800 mm)')
+            kw = {'tool': kw['tool'], 'mm': mm}
+        elif action == 'change':
+            if kw.get('tool') not in TOOLS:
+                raise ValueError('Ferramenta inválida')
+            kw = {'tool': kw['tool']}
+        elif action == 'reset':
+            if kw.get('tool') not in TOOLS + ('none',):
+                raise ValueError('Estado inválido')
+            kw = {'tool': kw['tool']}
+        elif action == 'heat':
+            h, b = int(kw.get('hotend', 0)), int(kw.get('bed', 0))
+            if not (0 <= h <= self._profile.get('max_hotend_c', 260) and 0 <= b <= self._profile.get('max_bed_c', 110)):
+                raise ValueError('Temperatura fora do limite do perfil')
+            kw = {'hotend': h, 'bed': b}
+        self._test_q.put((action, kw))
+
+    def _test_loop(self, c):
+        p = m = None
+        try:
+            self._profile = load_profile(c['profile'])
+            bridge.print = self.log
+            self.log('Modo teste: conectando à impressora e ao Arduino...')
+            p = bridge.Device(c['printer_port'], c['printer_baud'], 'VYPER', True)
+            m = bridge.Device(c['mmu_port'], c['mmu_baud'], 'ARDUINO', True)
+            b = bridge.Bridge(c, p, m, True)
+            b.setup()
+            self._read_temps(b)
+            self._set(state='test', message='Modo teste conectado', positions=dict(b.positions), tool=b.tool)
+            self.log('Modo teste pronto. Posições assumidas:', b.positions)
+            last = time.monotonic()
+            while not self.stop_ev.is_set():
+                try:
+                    action, kw = self._test_q.get(timeout=.2)
+                except queue.Empty:
+                    if time.monotonic() - last > 3:
+                        self._read_temps(b)
+                        last = time.monotonic()
+                    continue
+                self._set(command=f'{action} {kw}')
+                try:
+                    self._do_test(b, c, action, kw)
+                except bridge.BridgeError as e:
+                    self.log('Teste falhou:', e)
+                self._set(command='', tool=b.tool, positions=dict(b.positions))
+                self._read_temps(b)
+                last = time.monotonic()
+            for cmd in ('M104 S0', 'M140 S0'):
+                b.printer(cmd)
+            self.log('Modo teste encerrado; aquecedores desligados.')
+            self._finish('idle', 'Modo teste encerrado')
+        except Exception as e:
+            self._abort(p, True, e, 'error')
+        finally:
+            bridge.print = builtins.print
+            for d in (p, m):
+                if d:
+                    try:
+                        d.close()
+                    except Exception:
+                        pass
+
+    def _do_test(self, b, c, action, kw):
+        if action == 'gcode':
+            b.printer(kw['line'])
+        elif action == 'mmu':
+            b.mmu(kw['line'])
+        elif action == 'home':
+            b.printer('G28')
+        elif action == 'heat':
+            b.printer(f'M104 S{kw["hotend"]}')
+            b.printer(f'M140 S{kw["bed"]}')
+        elif action == 'cool':
+            b.printer('M104 S0'); b.printer('M140 S0')
+        elif action == 'reset':
+            t = kw['tool']
+            b.tool = t if t in TOOLS else None
+            b.positions = {x: c['load_target_mm'][x] if x == b.tool else c['park_mm'][x] for x in TOOLS}
+            self.log('Estado definido manualmente:', b.tool or 'nenhuma carregada', b.positions)
+        elif action == 'move':
+            t, mm = kw['tool'], kw['mm']
+            self.log(f'Movendo {t} {mm:+g} mm (manual)')
+            if t == 'T1':
+                b.external(mm)
+            else:
+                b.printer('M83')
+                left = mm
+                while abs(left) > 1e-9:
+                    d = math.copysign(min(abs(left), 50.), left)
+                    b.printer(f'G1 E{d:.4f} F{c["native_change_feed"]}')
+                    left -= d
+                b.printer('M400')
+            b.positions[t] += mm
+        elif action == 'change':
+            self.log(f'Troca de teste: {b.tool or "nenhuma"} -> {kw["tool"]}')
+            b.change(kw['tool'])
+            self.log('Troca concluída. Posições:', b.positions)
 
     def adjust(self, kind, value):
         """Enfileira um ajuste ao vivo; é enviado à impressora entre comandos."""
