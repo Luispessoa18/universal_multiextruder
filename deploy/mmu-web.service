@@ -1,0 +1,15 @@
+[Unit]
+Description=Universal Multiextruder - interface web
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=__USER__
+WorkingDirectory=__DIR__
+EnvironmentFile=-__DIR__/.env
+ExecStart=__DIR__/.venv/bin/python __DIR__/server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

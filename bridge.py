@@ -59,23 +59,32 @@ class Bridge:
         self.e=0.; self.native_e=0.; self.fault=False
         self.tools=c['tool_map']; self.park=c['park_mm']; self.f=1200.
         self.positions={str(k):float(v) for k,v in c['initial_positions_mm'].items()}
+        self.ext_residual=0.  # fração < 1 passo ainda não enviada ao Arduino
         self.setup_done=False
     def printer(self,cmd,feedback=None): return self.p.command(cmd,feedback=feedback)
     def mmu(self,cmd): return self.m.command(cmd)
     def setup(self):
+        # No firmware MMU_Vyper, 'T1' seleciona o motor 1 do shield (não é a ferramenta do G-code).
         self.mmu('PING'); self.mmu('T1'); self.mmu('CAL='+str(self.c['steps_mm'])); self.mmu('RPM='+str(self.c['rpm']))
+        self.mmu('S')
         self.setup_done=True
     def heat(self):
         replies=self.printer('M105')
         s=' '.join(replies); m=re.search(r'\bT(?:0)?:\s*([\d.]+)',s)
         if not m or float(m.group(1))<self.c['minimum_hotend_c']: raise BridgeError('Hotend frio ou leitura indisponivel')
     def external(self,delta):
-        if abs(delta)<1e-8:return
-        # Firmware atual tem limite de 300 mm por comando.
-        while abs(delta)>1e-8:
-            d=min(abs(delta), 100.)
-            self.mmu(('F' if delta>0 else 'R')+f'{d:.5f}')
-            delta-=math.copysign(d,delta)
+        # Firmware: F/R aceitam 0 < mm <= 300 e arredondam para passos inteiros.
+        # Acumula a fração para não enviar 'F0.00000' (error: DISTANCE) nem perder passos.
+        spm=float(self.c['steps_mm'])
+        self.ext_residual+=delta
+        steps=int(self.ext_residual*spm)  # trunca em direção a zero
+        if steps==0:return
+        self.ext_residual-=steps/spm
+        chunk=int(100.*spm)
+        while steps:
+            n=min(abs(steps),chunk)
+            self.mmu(('F' if steps>0 else 'R')+f'{n/spm:.5f}')
+            steps-=int(math.copysign(n,steps))
     def native(self,delta):
         if abs(delta)<1e-8:return
         self.heat(); self.printer('M83')
@@ -178,10 +187,14 @@ class Protocol:
 
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument('--config',default=str(ROOT/'config.json')); ap.add_argument('--file'); ap.add_argument('--live',action='store_true'); ap.add_argument('--console',action='store_true'); a=ap.parse_args()
-    c=json.loads(Path(a.config).read_text()); p=m=v=None
+    raw=json.loads(Path(a.config).read_text(encoding='utf-8')); p=m=v=None
+    if 'tool_map' in raw:c=raw
+    else:
+        import runner  # config.json simples (o mesmo da interface web/desktop)
+        c={**raw,**runner.build_config(runner.normalize(raw),bool(raw.get('confirm_geometry')))}
     try:
         if a.live and c['printer_port']==c['mmu_port']:raise BridgeError('Portas fisicas iguais')
-        p=Device(c['printer_port'],c['printer_baud'],'VYPER',a.live); m=Device(c['mmu_port'],9600,'ARDUINO',a.live)
+        p=Device(c['printer_port'],c['printer_baud'],'VYPER',a.live); m=Device(c['mmu_port'],c.get('mmu_baud',9600),'ARDUINO',a.live)
         b=Bridge(c,p,m,a.live); b.setup(); proto=Protocol(b)
         if a.file or a.console:
             stream=open(a.file,encoding='utf-8') if a.file else sys.stdin

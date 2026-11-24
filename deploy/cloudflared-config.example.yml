@@ -1,0 +1,8 @@
+# Copie para ~/.cloudflared/config.yml e ajuste <TUNNEL_ID>, usuário e hostname.
+tunnel: <TUNNEL_ID>
+credentials-file: /home/<usuario>/.cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  - hostname: impressora.seudominio.com
+    service: http://localhost:8080
+  - service: http_status:404

@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Universal Multiextruder</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--fg:#1c1f24;--mut:#6b7280;--line:#e3e5e8;--acc:#2563eb;--ok:#16a34a;--warn:#d97706;--bad:#dc2626;--code:#f1f3f5}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b21;--fg:#e6e8eb;--mut:#9aa1ac;--line:#2a2f38;--acc:#60a5fa;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171;--code:#11141a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line);background:var(--card);position:sticky;top:0;z-index:2}
+header h1{font-size:18px;margin:0;flex:1}
+main{max-width:1100px;margin:0 auto;padding:16px;display:grid;gap:16px;grid-template-columns:1fr}
+@media(min-width:900px){main{grid-template-columns:3fr 2fr}.wide{grid-column:1/-1}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;min-width:0}
+.card h2{font-size:14px;text-transform:uppercase;letter-spacing:.05em;color:var(--mut);margin:0 0 12px}
+.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:13px;font-weight:600;border:1px solid currentColor}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--mut)}
+.dot.on{background:var(--ok)}.dot.off{background:var(--bad)}
+.bar{height:22px;background:var(--code);border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+.bar>div{height:100%;background:var(--acc);width:0;transition:width .4s}
+.big{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:12px}
+.stat{background:var(--code);border-radius:8px;padding:8px 10px;min-width:0}
+.stat b{display:block;font-size:12px;color:var(--mut);font-weight:500}
+.stat span{font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,select,input{font:inherit;color:inherit}
+button{padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:var(--code);cursor:pointer}
+button.pri{background:var(--acc);color:#fff;border-color:var(--acc)}
+button.danger{background:var(--bad);color:#fff;border-color:var(--bad)}
+button:disabled{opacity:.45;cursor:not-allowed}
+input,select{padding:7px 9px;border-radius:8px;border:1px solid var(--line);background:var(--bg);width:100%;min-width:0}
+input[type=checkbox]{width:auto}
+label.f{display:grid;gap:3px;font-size:13px;color:var(--mut)}
+.form{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}
+pre{margin:0;background:var(--code);border-radius:8px;padding:10px;height:320px;overflow:auto;font:12px/1.4 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-all}
+.files{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:6px;max-height:260px;overflow:auto}
+.files li{display:flex;gap:8px;align-items:center;padding:6px 8px;border-radius:8px;background:var(--code)}
+.files li.sel{outline:2px solid var(--acc)}
+.files li span{flex:1;overflow-wrap:anywhere;cursor:pointer}
+.files small{color:var(--mut)}
+.warn{color:var(--warn);font-size:13px}
+#msg{min-height:1.4em;font-size:14px}
+#msg.err{color:var(--bad)}#msg.ok{color:var(--ok)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Universal Multiextruder</h1>
+  <span id="mode" class="badge" style="color:var(--mut)">—</span>
+  <span id="conn" class="dot" title="Conexão com o servidor"></span>
+</header>
+<main>
+  <section class="card">
+    <h2>Impressão</h2>
+    <div class="row" style="justify-content:space-between">
+      <span id="state" class="badge">—</span>
+      <span id="file" style="color:var(--mut);overflow-wrap:anywhere">nenhum arquivo</span>
+    </div>
+    <div class="row" style="margin:10px 0 6px;justify-content:space-between">
+      <span class="big" id="pct">0%</span>
+      <span id="message" style="color:var(--mut);text-align:right"></span>
+    </div>
+    <div class="bar"><div id="barfill"></div></div>
+    <div class="grid">
+      <div class="stat"><b>Camada</b><span id="layer">—</span></div>
+      <div class="stat"><b>Comandos</b><span id="cmds">—</span></div>
+      <div class="stat"><b>Linha do arquivo</b><span id="line">—</span></div>
+      <div class="stat"><b>Ferramenta</b><span id="tool">—</span></div>
+      <div class="stat"><b>Hotend</b><span id="hotend">—</span></div>
+      <div class="stat"><b>Mesa</b><span id="bed">—</span></div>
+      <div class="stat"><b>Decorrido</b><span id="elapsed">—</span></div>
+      <div class="stat"><b>Restante (estim.)</b><span id="eta">—</span></div>
+      <div class="stat"><b>Velocidade</b><span id="speed">—</span></div>
+      <div class="stat"><b>Fluxo (T0)</b><span id="flow">—</span></div>
+      <div class="stat"><b>Ventoinha</b><span id="fan">—</span></div>
+      <div class="stat"><b>Perfil</b><span id="profname">—</span></div>
+    </div>
+    <div class="stat" style="margin-top:10px"><b>Comando atual</b><span id="command" style="font-family:ui-monospace,Consolas,monospace">—</span></div>
+  </section>
+
+  <section class="card">
+    <h2>Controle</h2>
+    <label class="f">Arquivo
+      <select id="fileSel"></select>
+    </label>
+    <label class="row" style="margin:12px 0;font-size:14px">
+      <input type="checkbox" id="confirm">
+      Geometria, posição inicial, sentido e temperatura conferidos; troca em local seguro
+    </label>
+    <div class="row">
+      <button id="btnSim">Simular</button>
+      <button id="btnLive" class="pri">Executar real</button>
+      <button id="btnPause">Pausar</button>
+      <button id="btnStop" class="danger">Parar</button>
+    </div>
+    <p class="warn">Pausar/parar atuam entre comandos, não são parada de emergência. Ao parar no modo real, o sistema tenta desligar os aquecedores. Em emergência, desligue fisicamente.</p>
+    <div id="msg"></div>
+    <h2 style="margin-top:16px">Arquivos</h2>
+    <div class="row">
+      <input type="file" id="upload" accept=".gcode,.gco,.gc,.g" style="flex:1">
+      <button id="btnUpload">Enviar</button>
+    </div>
+    <div class="bar" id="upbar" style="height:6px;margin-top:6px;display:none"><div></div></div>
+    <ul class="files" id="files"></ul>
+  </section>
+
+  <section class="card wide">
+    <h2>Ajustes ao vivo</h2>
+    <p style="margin:0 0 12px;color:var(--mut);font-size:13px">Enviados à impressora entre comandos (M220 velocidade, M221 fluxo, M106 ventoinha, M104/M140 temperaturas). Aceleração e jerk ficam sempre no padrão do firmware. Comandos do próprio G-code (ex.: M106 a cada camada, M104 de troca de temperatura) podem sobrescrever o ajuste.</p>
+    <div class="form" id="adjust"></div>
+  </section>
+
+  <section class="card wide">
+    <h2>Impressora</h2>
+    <div class="grid" id="profgrid" style="margin-top:0"></div>
+    <p id="profnote" style="color:var(--mut);font-size:13px"></p>
+    <div class="row">
+      <button id="btnInfo">Ler da impressora (M115 / M503)</button>
+      <span style="color:var(--mut);font-size:13px">Somente com a máquina ociosa. Abrir a porta reinicia a placa da Vyper.</span>
+    </div>
+    <div id="infoOut" style="display:none;margin-top:12px">
+      <div id="fw" style="font-size:13px;margin-bottom:8px;overflow-wrap:anywhere"></div>
+      <div class="grid" id="m503" style="margin-top:0"></div>
+      <details style="margin-top:10px"><summary style="cursor:pointer">Resposta completa</summary><pre id="infoRaw" style="height:240px;margin-top:8px"></pre></details>
+    </div>
+  </section>
+
+  <section class="card wide">
+    <h2>Configuração</h2>
+    <p style="margin:0 0 12px;color:var(--mut);font-size:13px">T0 = extrusor da impressora (padrão) · T1 = extrusor externo no Arduino. No Linux, prefira os caminhos <code>/dev/serial/by-id</code> (ou <code>by-path</code>): eles não mudam quando os cabos USB trocam de ordem.</p>
+    <form class="form" id="settings" onsubmit="return false"></form>
+    <datalist id="portlist"></datalist>
+    <div class="row" style="margin-top:12px">
+      <button id="btnSave" class="pri">Salvar</button>
+      <button id="btnPorts">Atualizar portas</button>
+      <span id="portinfo" style="color:var(--mut);font-size:13px"></span>
+    </div>
+  </section>
+
+  <section class="card wide">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <h2 style="margin:0">Log</h2>
+      <label class="row" style="font-size:13px"><input type="checkbox" id="autoscroll" checked> rolar automaticamente</label>
+    </div>
+    <pre id="log"></pre>
+  </section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const RUN=new Set(['preflight','connecting','running','paused']);
+const LABEL={idle:'Ocioso',preflight:'Pré-validação',connecting:'Conectando',running:'Executando',paused:'Pausado',done:'Concluído',stopped:'Parado',error:'Erro'};
+const COLOR={idle:'var(--mut)',preflight:'var(--warn)',connecting:'var(--warn)',running:'var(--acc)',paused:'var(--warn)',done:'var(--ok)',stopped:'var(--warn)',error:'var(--bad)'};
+const FIELDS=[
+  ['printer_port','Porta da impressora (T0)','port'],['printer_baud','Baud impressora'],
+  ['mmu_port','Porta do Arduino (T1)','port'],['mmu_baud','Baud Arduino'],
+  ['initial_tool','Estado inicial','tool'],['minimum_hotend_c','Hotend mínimo p/ troca (°C)'],
+  ['p0','T0 estacionamento (mm)'],['l0','T0 alvo (mm, medir)'],['native_change_feed','T0 velocidade de troca (mm/min)'],
+  ['steps_mm','T1 passos/mm'],['rpm','T1 RPM (1–60)'],['p1','T1 estacionamento (mm)'],['l1','T1 alvo (mm)'],
+  ['profile','Perfil da impressora','profile'],
+];
+let lastSeq=0,logLines=[],st=null,files=[];
+
+async function api(path,opts={}){
+  opts.headers={'X-Requested-With':'mmu',...(opts.headers||{})};
+  const r=await fetch(path,opts);let d={};try{d=await r.json()}catch(_){}
+  if(!r.ok)throw new Error(d.error||r.status+' '+r.statusText);return d;
+}
+let profiles=[],prof=null;
+const ADJ=[['speed','Velocidade (%)',10,300,100],['flow','Fluxo T0 (%)',50,150,100],['fan','Ventoinha (%)',0,100,100],['hotend','Hotend (°C)',0,null,200],['bed','Mesa (°C)',0,null,60]];
+const M503={M92:'Passos/mm',M203:'Velocidade máx. (mm/s)',M201:'Aceleração máx. (mm/s²)',M204:'Aceleração (P impressão · R retração · T deslocamento)',M205:'Jerk / junction deviation',M206:'Offset do home',M851:'Z-offset da sonda',M301:'PID do hotend',M304:'PID da mesa',M420:'Nivelamento (malha)',M900:'Linear advance',M145:'Pré-aquecimento',M413:'Recuperação de queda de energia',M200:'Diâmetro do filamento',M149:'Unidade de temperatura',M907:'Corrente dos motores',M906:'Corrente dos motores (TMC)'};
+const post=(p,body)=>api(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
+function say(t,cls){const m=$('msg');m.textContent=t||'';m.className=cls||''}
+function fmt(t){if(t==null)return'—';t=Math.max(0,Math.round(t));const h=Math.floor(t/3600),m=Math.floor(t%3600/60),s=t%60;return(h?h+'h ':'')+String(m).padStart(2,'0')+'m '+String(s).padStart(2,'0')+'s'}
+function temp(a,b){return a==null?'—':a.toFixed(1)+' / '+(b==null?'—':b.toFixed(0))+' °C'}
+function size(n){return n>1048576?(n/1048576).toFixed(1)+' MB':(n/1024).toFixed(0)+' KB'}
+
+function render(d){
+  st=d;
+  if(d.seq<lastSeq){lastSeq=0;logLines=[]}
+  if(d.logs.length){
+    for(const l of d.logs)logLines.push(new Date(l.t*1000).toLocaleTimeString()+'  '+l.text);
+    if(logLines.length>1500)logLines=logLines.slice(-1500);
+    lastSeq=d.logs[d.logs.length-1].seq;
+    const pre=$('log');pre.textContent=logLines.join('\n');
+    if($('autoscroll').checked)pre.scrollTop=pre.scrollHeight;
+  }
+  const s=$('state');s.textContent=LABEL[d.state]||d.state;s.style.color=COLOR[d.state]||'';
+  const md=$('mode');md.textContent=d.file?(d.live?'MODO REAL':'SIMULAÇÃO'):'—';md.style.color=d.live?'var(--bad)':'var(--mut)';
+  $('file').textContent=d.file||'nenhum arquivo';
+  const p=d.progress||0;$('pct').textContent=p.toFixed(1)+'%';$('barfill').style.width=p+'%';
+  $('message').textContent=d.message||'';
+  $('layer').textContent=d.total_layers?d.layer+' / '+d.total_layers:'—';
+  $('cmds').textContent=d.total_cmds?d.done_cmds+' / '+d.total_cmds:'—';
+  $('line').textContent=d.line?d.line+' / '+d.total_lines:'—';
+  $('tool').textContent=d.tool?(d.tool+(d.tool==='T0'?' · impressora':' · Arduino')):'nenhuma';
+  $('hotend').textContent=temp(d.hotend,d.hotend_target);
+  $('bed').textContent=temp(d.bed,d.bed_target);
+  $('elapsed').textContent=d.started?fmt(d.elapsed):'—';
+  $('eta').textContent=fmt(d.eta);
+  $('command').textContent=d.command||'—';
+  $('speed').textContent=d.file?d.speed_factor+' %':'—';
+  $('flow').textContent=d.file?d.flow_factor+' %':'—';
+  $('fan').textContent=d.fan==null?'—':d.fan+' %';
+  $('profname').textContent=d.profile||(prof?prof.name:'—');
+  document.title=(RUN.has(d.state)?p.toFixed(0)+'% · ':'')+'Universal Multiextruder';
+  updateButtons();
+}
+function updateButtons(){
+  const running=st&&st.running, has=!!$('fileSel').value;
+  $('btnSim').disabled=running||!has;
+  $('btnLive').disabled=running||!has||!$('confirm').checked;
+  $('btnPause').disabled=!running;$('btnStop').disabled=!running;
+  document.querySelectorAll('#adjust button').forEach(b=>b.disabled=!running);
+  $('btnInfo').disabled=!!running;
+  $('btnPause').textContent=st&&st.state==='paused'?'Retomar':'Pausar';
+}
+async function poll(){
+  try{render(await api('/api/status?since='+lastSeq));$('conn').className='dot on'}
+  catch(e){$('conn').className='dot off'}
+  finally{setTimeout(poll,1000)}
+}
+
+function renderFiles(list){
+  files=list;const sel=$('fileSel'),cur=sel.value;sel.innerHTML='';
+  for(const f of files){const o=document.createElement('option');o.value=o.textContent=f.name;sel.appendChild(o)}
+  if(files.some(f=>f.name===cur))sel.value=cur;
+  const ul=$('files');ul.innerHTML='';
+  if(!files.length){const li=document.createElement('li');li.textContent='Nenhum arquivo enviado.';ul.appendChild(li)}
+  for(const f of files){
+    const li=document.createElement('li');if(f.name===sel.value)li.className='sel';
+    const n=document.createElement('span');n.textContent=f.name;n.onclick=()=>{sel.value=f.name;renderFiles(files)};
+    const sm=document.createElement('small');sm.textContent=size(f.size)+' · '+new Date(f.mtime*1000).toLocaleString();
+    const del=document.createElement('button');del.textContent='Excluir';
+    del.onclick=async()=>{if(!confirm('Excluir '+f.name+'?'))return;try{renderFiles((await api('/api/files/'+encodeURIComponent(f.name),{method:'DELETE'})).files)}catch(e){say(e.message,'err')}};
+    li.append(n,sm,del);ul.appendChild(li);
+  }
+  updateButtons();
+}
+$('fileSel').onchange=()=>renderFiles(files);
+$('confirm').onchange=updateButtons;
+
+$('btnUpload').onclick=()=>{
+  const f=$('upload').files[0];if(!f){say('Escolha um arquivo','err');return}
+  const fd=new FormData();fd.append('file',f);
+  const x=new XMLHttpRequest(),bar=$('upbar');bar.style.display='block';
+  x.open('POST','/api/files');x.setRequestHeader('X-Requested-With','mmu');
+  x.upload.onprogress=e=>{if(e.lengthComputable)bar.firstElementChild.style.width=(100*e.loaded/e.total)+'%'};
+  x.onload=()=>{bar.style.display='none';let d={};try{d=JSON.parse(x.responseText)}catch(_){}
+    if(x.status>=400){say(d.error||'Falha no envio','err');return}
+    $('upload').value='';renderFiles(d.files);$('fileSel').value=d.name;renderFiles(d.files);say('Enviado: '+d.name,'ok')};
+  x.onerror=()=>{bar.style.display='none';say('Falha de rede no envio','err')};
+  x.send(fd);
+};
+
+function buildForm(){
+  const form=$('settings');
+  for(const [k,label,kind] of FIELDS){
+    const l=document.createElement('label');l.className='f';l.textContent=label;
+    let el;
+    if(kind==='profile'){el=document.createElement('select');
+      for(const n of profiles){const o=document.createElement('option');o.value=o.textContent=n;el.appendChild(o)}}
+    else if(kind==='tool'){el=document.createElement('select');
+      for(const [v,t] of [['T0','T0 carregado (padrão)'],['T1','T1 carregado'],['none','Nenhum (ambos estacionados)']]){const o=document.createElement('option');o.value=v;o.textContent=t;el.appendChild(o)}}
+    else{el=document.createElement('input');if(kind==='port')el.setAttribute('list','portlist');else el.inputMode='decimal'}
+    el.name=k;l.appendChild(el);form.appendChild(l);
+  }
+}
+async function loadSettings(){const d=await api('/api/settings');for(const [k] of FIELDS)$('settings').elements[k].value=d.settings[k]}
+async function saveSettings(){const body={};for(const [k] of FIELDS)body[k]=$('settings').elements[k].value;return post('/api/settings',body)}
+async function loadPorts(){
+  try{const d=await api('/api/ports');const dl=$('portlist');dl.innerHTML='';
+    for(const p of d.ports){const o=document.createElement('option');o.value=p.device;o.label=p.description;dl.appendChild(o)}
+    $('portinfo').textContent=d.ports.length?d.ports.length+' porta(s) encontrada(s) — clique no campo para escolher':'Nenhuma porta serial encontrada';
+  }catch(e){$('portinfo').textContent=e.message}
+}
+$('btnSave').onclick=async()=>{try{await saveSettings();await loadProfile();say('Configuração salva','ok')}catch(e){say(e.message,'err')}};
+$('btnPorts').onclick=loadPorts;
+
+async function start(live){
+  if(live&&!confirm('MODO REAL\n\nNão é uma impressão multicolorida completa. Confirme que hotend, filamentos e posição da máquina estão seguros. Parar não é parada de emergência.\n\nContinuar?'))return;
+  try{await saveSettings();await post('/api/start',{file:$('fileSel').value,live,confirm:$('confirm').checked});say(live?'Execução real iniciada':'Simulação iniciada','ok')}
+  catch(e){say(e.message,'err')}
+}
+$('btnSim').onclick=()=>start(false);
+$('btnLive').onclick=()=>start(true);
+$('btnPause').onclick=()=>post('/api/pause').catch(e=>say(e.message,'err'));
+$('btnStop').onclick=()=>{if(confirm('Parar após o comando atual?'))post('/api/stop').catch(e=>say(e.message,'err'))};
+
+function buildAdjust(){
+  const box=$('adjust');box.innerHTML='';
+  for(const [k,label,lo,hi,def] of ADJ){
+    const max=hi!=null?hi:(prof?(k==='bed'?prof.max_bed_c:prof.max_hotend_c):300);
+    const l=document.createElement('label');l.className='f';l.textContent=label+' · '+lo+'–'+max;
+    const r=document.createElement('div');r.className='row';r.style.flexWrap='nowrap';
+    const i=document.createElement('input');i.type='number';i.min=lo;i.max=max;i.value=def;i.id='adj_'+k;
+    const b=document.createElement('button');b.textContent='Aplicar';
+    b.onclick=async()=>{try{await post('/api/adjust',{kind:k,value:i.value});say(label+' → '+i.value+' (na fila)','ok')}catch(e){say(e.message,'err')}};
+    r.append(i,b);l.appendChild(r);box.appendChild(l);
+  }
+  updateButtons();
+}
+function renderProfile(){
+  if(!prof)return;
+  const g=$('profgrid');g.innerHTML='';
+  const items=[['Modelo',prof.name],['Firmware',prof.firmware||'—'],['Área (X×Y×Z)',prof.bed_mm.x+' × '+prof.bed_mm.y+' × '+prof.bed_mm.z+' mm'],
+    ['Hotend máx.',prof.max_hotend_c+' °C'],['Mesa máx.',prof.max_bed_c+' °C'],['Bico / filamento',(prof.nozzle_mm||'—')+' / '+(prof.filament_mm||'—')+' mm'],
+    ['Aceleração',prof.acceleration==='firmware'?'padrão do firmware':String(prof.acceleration)],['Removidos do G-code',prof.strip_codes.join(', ')||'nenhum'],
+    ['Velocidade / fluxo inicial',prof.speed_factor+' % / '+prof.flow_factor+' %']];
+  for(const [k,v] of items){const d=document.createElement('div');d.className='stat';const b=document.createElement('b');b.textContent=k;const s=document.createElement('span');s.textContent=v;d.append(b,s);g.appendChild(d)}
+  $('profnote').textContent=(prof.notes||'')+' Arquivo: profiles/'+$('settings').elements.profile.value+'.json';
+}
+async function loadProfile(){try{const d=await api('/api/profile');prof=d.profile;renderProfile();buildAdjust()}catch(e){say(e.message,'err')}}
+$('btnInfo').onclick=async()=>{
+  const b=$('btnInfo');b.disabled=true;b.textContent='Lendo...';
+  try{await saveSettings();const d=await post('/api/printer/info');
+    $('infoOut').style.display='block';$('fw').textContent=d.firmware||'Firmware não informado';
+    const g=$('m503');g.innerHTML='';
+    for(const [code,vals] of Object.entries(d.settings)){
+      const c=document.createElement('div');c.className='stat';const t=document.createElement('b');t.textContent=code+(M503[code]?' · '+M503[code]:'');
+      const v=document.createElement('span');v.style.fontFamily='ui-monospace,Consolas,monospace';v.style.fontSize='13px';v.textContent=vals.join('\n');v.style.whiteSpace='pre-wrap';
+      c.append(t,v);g.appendChild(c)}
+    $('infoRaw').textContent=d.lines.join('\n');say('Configuração da impressora lida','ok')}
+  catch(e){say(e.message,'err')}
+  finally{b.textContent='Ler da impressora (M115 / M503)';updateButtons()}
+};
+
+(async()=>{
+  try{profiles=(await api('/api/profile')).profiles||[]}catch(_){}
+  buildForm();
+  await loadSettings().catch(e=>say(e.message,'err'));
+  await loadProfile();
+})();
+loadPorts();
+api('/api/files').then(d=>renderFiles(d.files)).catch(e=>say(e.message,'err'));
+poll();
+</script>
+</body>
+</html>
