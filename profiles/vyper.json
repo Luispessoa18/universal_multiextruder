@@ -17,6 +17,14 @@
   "flow_factor": 100,
   "factors_help": "Aplicados no início (M220 velocidade / M221 fluxo, em %). 100 = exatamente o que o fatiador gerou. Podem ser alterados ao vivo na interface web. Fluxo só afeta T0 (extrusor da impressora).",
 
+  "tool_change": {
+    "lift_mm": 2,
+    "park_xy": [5, 5],
+    "purge_mm": 0,
+    "first_layer_z": 0.2,
+    "help": "Usado pelo conversor (Bambu/Orca/Prusa -> Vyper) em cada troca T0<->T1: sobe lift_mm, vai até park_xy, troca, purga purge_mm (0 = sem purga; use torre de purga no fatiador) e volta."
+  },
+
   "slicer": {
     "flavor": "Marlin",
     "tools": "T0 = extrusor da impressora (padrão) | T1 = Arduino",

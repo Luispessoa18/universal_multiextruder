@@ -8,16 +8,17 @@ Variáveis de ambiente:
   MMU_USER      usuário (padrão: admin)
   MMU_HOST / MMU_PORT / MMU_MAX_UPLOAD_MB
 """
-import argparse, hmac, os, re, sys
+import argparse, hmac, os, re, sys, threading, zipfile
 from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_from_directory
 from werkzeug.utils import secure_filename
-import runner
+import converter, runner
 
 ROOT = Path(__file__).resolve().parent
 UPLOADS = ROOT / 'uploads'
 WEB = ROOT / 'web'
-EXTS = {'.gcode', '.gco', '.gc', '.g'}
+GCODE_EXTS = {'.gcode', '.gco', '.gc', '.g'}
+EXTS = GCODE_EXTS | {'.3mf'}
 
 app = Flask(__name__, static_folder=None)
 app.config['MAX_CONTENT_LENGTH'] = int(os.environ.get('MMU_MAX_UPLOAD_MB', '200')) * 1024 * 1024
@@ -115,7 +116,7 @@ def upload():
     f = request.files.get('file')
     name = secure_filename(f.filename) if f and f.filename else ''
     if not name or Path(name).suffix.lower() not in EXTS:
-        return jsonify(error='Envie um arquivo .gcode/.gco/.gc'), 400
+        return jsonify(error='Envie um arquivo .gcode, .gcode.3mf ou .3mf'), 400
     UPLOADS.mkdir(exist_ok=True)
     if job.running and job.status.get('file') == name:
         return jsonify(error='Arquivo em uso pelo trabalho atual'), 409
@@ -141,6 +142,8 @@ def start():
     path = UPLOADS / name
     if not name or not path.is_file():
         return jsonify(error='Arquivo não encontrado'), 400
+    if path.suffix.lower() not in GCODE_EXTS:
+        return jsonify(error='Converta o 3MF para Vyper antes de imprimir'), 400
     try:
         job.start(path, runner.load_settings(), bool(data.get('live')), bool(data.get('confirm')))
     except (ValueError, RuntimeError, OSError) as e:
@@ -157,6 +160,88 @@ def pause():
 @app.post('/api/stop')
 def stop():
     job.stop()
+    return jsonify(ok=True)
+
+
+_analysis = {}
+_conv = {'state': 'idle'}
+_conv_lock = threading.Lock()
+
+
+def _upload_path(name):
+    name = secure_filename(str(name or ''))
+    path = UPLOADS / name
+    if not name or not path.is_file():
+        raise FileNotFoundError('Arquivo não encontrado')
+    return path
+
+
+def _analyze(path):
+    st = path.stat()
+    key = (path.name, st.st_mtime, st.st_size)
+    if key not in _analysis:
+        _analysis.clear()  # mantém só o último (arquivos grandes)
+        _analysis[key] = converter.analyze(path)
+    return _analysis[key]
+
+
+@app.get('/api/analyze')
+def analyze():
+    try:
+        return jsonify(_analyze(_upload_path(request.args.get('file'))))
+    except FileNotFoundError as e:
+        return jsonify(error=str(e)), 404
+    except (converter.ConvertError, OSError) as e:
+        return jsonify(error=str(e)), 400
+
+
+@app.get('/api/thumb')
+def thumb():
+    try:
+        data = converter.thumbnail(_upload_path(request.args.get('file')), int(request.args.get('plate', 1)))
+    except (FileNotFoundError, KeyError, ValueError, OSError, zipfile.BadZipFile):
+        return Response(status=404)
+    return Response(data, mimetype='image/png', headers={'Cache-Control': 'max-age=3600'})
+
+
+def _convert_worker(path, member, mapping, center, out, nplates):
+    try:
+        prof = runner.load_profile(runner.load_settings()['profile'])
+        res = converter.convert(path, member, mapping, prof, center, out, source_name=path.name)
+        _conv.update(state='done', message='Convertido: ' + res['output'], result=res)
+    except Exception as e:
+        _conv.update(state='error', message=str(e), result=None)
+
+
+@app.get('/api/convert')
+def convert_status():
+    return jsonify(_conv)
+
+
+@app.post('/api/convert')
+def convert():
+    data = request.get_json(force=True) or {}
+    try:
+        path = _upload_path(data.get('file'))
+        info = _analyze(path)
+        plate = next((p for p in info['plates'] if p['plate'] == int(data.get('plate', 1))), None)
+        if plate is None:
+            raise ValueError('Placa inexistente')
+        mapping = {int(k): str(v) for k, v in (data.get('mapping') or {}).items()}
+    except FileNotFoundError as e:
+        return jsonify(error=str(e)), 404
+    except (converter.ConvertError, ValueError, TypeError, OSError) as e:
+        return jsonify(error=str(e)), 400
+    out = UPLOADS / converter.output_name(path.name, plate['plate'], len(info['plates']))
+    if job.running and job.status.get('file') == out.name:
+        return jsonify(error='O arquivo convertido está em uso pelo trabalho atual'), 409
+    with _conv_lock:
+        if _conv.get('state') == 'running':
+            return jsonify(error='Já existe uma conversão em andamento'), 409
+        _conv.clear()
+        _conv.update(state='running', message='Convertendo ' + path.name + '...', result=None)
+    threading.Thread(target=_convert_worker, args=(path, plate['member'], mapping, bool(data.get('center', True)),
+                                                   out, len(info['plates'])), daemon=True).start()
     return jsonify(ok=True)
 
 

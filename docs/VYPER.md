@@ -111,3 +111,24 @@ Antes de abrir qualquer porta, a ponte simula o arquivo inteiro e recusa:
 - comandos fora da lista do modo real e as restrições de T1 (veja o README).
 
 Os valores do perfil são os de fábrica da Vyper. **Confira-os na sua máquina** com o botão M503 e ajuste o JSON se necessário.
+
+## 6. Arquivos multicolor (Bambu Studio, Orca, Prusa) → Vyper
+
+Envie o `.gcode.3mf` (Bambu Studio/Orca: **"Exportar arquivo fatiado da placa"**) ou o `.gcode` e clique em **"Analisar / converter"**. Um 3MF de projeto, sem fatiar, não funciona: ele não tem G-code dentro.
+
+1. **Cores:** aparecem as cores, o tipo e o peso de cada filamento (do `slice_info.config` do 3MF ou do bloco `; filament_colour =` do G-code), a miniatura da placa e quantas trocas o arquivo tem.
+2. **Portas:** informe a cor carregada em T0 e em T1. A ferramenta sugere a porta de cada cor pela cor mais próxima, e você pode trocar.
+3. **Mais cores do que portas:** com 3 ou 4 cores e só 2 portas, várias cores caem na mesma porta. As trocas entre elas **somem**, e a tela mostra quantas trocas sobram.
+4. **Converter:** gera `<nome>_vyper.gcode`, já selecionado para simular.
+
+O que a conversão faz:
+- Troca o início e o fim da impressora de origem pelos do perfil da Vyper. As temperaturas vêm do arquivo.
+- Remove os blocos de troca do AMS (`M620`…`M621`): eles vão até a rampa de descarte, fora da mesa da Vyper. No lugar, entra a troca do perfil (`tool_change`): sobe, estaciona, troca, aquece, volta.
+- Remove timelapse (`M622`/`M623`), `M1002`, `M73`, `M624/M625`, ventoinhas auxiliares (`M106 P2/P3`) e tudo que a Vyper não tem. O resumo lista o que saiu.
+- Converte arcos `G2/G3` em linhas; a subida em espiral da Bambu vira subida reta.
+- Centraliza a peça e a torre de purga na mesa de 245 mm. Recusa se não couber.
+
+Limitações:
+- A purga da Bambu era feita fora da peça e foi removida. Ative a **torre de purga** no fatiador ou configure `tool_change.purge_mm` no perfil.
+- Cores mapeadas para a mesma porta usam a temperatura da primeira.
+- **T1 no modo real continua bloqueado** (movimento + extrusão em placas diferentes, sem sincronia). Com cores em T1, o arquivo roda só em simulação. Para imprimir agora, mapeie todas as cores para T0.

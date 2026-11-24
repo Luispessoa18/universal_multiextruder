@@ -23,6 +23,7 @@ Guia completo de como o fatiador gera os dados, como mandar ajustes e como confi
 - `app.py`: interface desktop (Tkinter)
 - `runner.py`: execução compartilhada (pré-validação, pausa, parada, progresso, temperaturas e camadas)
 - `bridge.py`: tradução de G-code e comunicação serial
+- `converter.py`: conversão de arquivos Bambu/Orca/Prusa (multicolor) para a Vyper
 - `MMU_Vyper_v13.ino`: firmware do Arduino
 - `profiles/vyper.json`: perfil da Vyper · `docs/VYPER.md`: guia fatiador → impressora
 - `deploy/`: script de instalação, serviço systemd e exemplo do cloudflared
@@ -88,13 +89,28 @@ Variáveis (no `.env` ou no ambiente): `MMU_PASSWORD`, `MMU_USER` (padrão `admi
 
 ## Interface web
 
-- Envio e gerenciamento de arquivos G-code.
+- Envio de G-code e de `.gcode.3mf` (Bambu Studio/Orca); análise das cores e conversão multicolor para a Vyper (N cores → T0/T1).
 - Simular, executar real, pausar/retomar e parar.
 - Progresso, camada (marcadores `;LAYER_CHANGE` do Prusa/Orca ou `;LAYER:` do Cura), linha e comando atual, ferramenta ativa, temperaturas do hotend e da mesa, tempo decorrido e estimativa do restante.
 - Ajustes ao vivo: velocidade, fluxo, ventoinha e temperaturas.
 - Leitura da configuração da impressora (M115/M503).
 - Configuração de portas (com lista das portas detectadas), perfil e calibração.
 - Log em tempo real.
+
+## Geometria do caminho do filamento
+
+```
+T0 (Vyper)   ── 540 mm ──┐
+                          ├─ hub 90 mm (troca aos 45 mm) ── tubo final 50 mm ──> hotend
+T1 (Arduino) ── 470 mm ──┘
+```
+
+| | Estacionamento | Alvo | Percurso da troca |
+|---|---|---|---|
+| T0 | 575 (540 + 45 − 10) | 680 (540 + 90 + 50) | 105 mm |
+| T1 | 505 (470 + 45 − 10) | 610 (470 + 90 + 50) | 105 mm |
+
+O estacionamento deixa a ponta 10 mm antes do ponto de troca. Se mudar algum tubo, refaça a conta: estacionamento = tubo + 45 − 10; alvo = tubo + 90 + 50.
 
 ## Firmware do Arduino (`MMU_Vyper_v13.ino`)
 
@@ -117,6 +133,6 @@ A ponte envia no máximo 100 mm por comando. Também acumula frações menores q
 
 O modo real é experimental. A pré-validação recusa movimentos combinados XYZ+E em T1, porque os motores estão em placas independentes, sem sincronização STEP/DIR. **Ainda não é um sistema de impressão multicolorida funcional.** T0 executa movimentos normais. T1 só testa movimentos de extrusão isolados. Não execute impressão com T1.
 
-Trocas reais exigem os dois percursos calibrados e o estado inicial confirmado. O alvo de T1 (444,5 mm) é o final da mangueira, não o bico: configure a distância até o bico antes de habilitar. Meça e configure também o alvo de T0. O G-code deve estacionar o cabeçote em local seguro e aquecer antes da troca. Sem sensor, não há detecção de colisão. Não há garantia de temporização da extrusão externa.
+Trocas reais exigem os dois percursos calibrados e o estado inicial confirmado. Os alvos (T0 680 mm, T1 610 mm) são o fim do tubo final, não o bico: confira se a extrusora alcança o bico a partir dali antes de habilitar. O G-code deve estacionar o cabeçote em local seguro e aquecer antes da troca. Sem sensor, não há detecção de colisão. Não há garantia de temporização da extrusão externa.
 
 Pausar e parar só atuam entre comandos; não são parada de emergência. Ao parar ou dar erro no modo real, a ponte tenta enviar `M104 S0` e `M140 S0` (melhor esforço). Movimentos já enfileirados continuam. **Em emergência, desligue fisicamente.** Acompanhar pela internet não substitui supervisão presencial. Não retome após erro sem conferir as posições. Use fonte e drivers adequados à corrente dos motores.

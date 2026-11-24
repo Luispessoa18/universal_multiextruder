@@ -22,14 +22,20 @@ DEFAULTS = {
     'mmu_baud': 9600,
     'steps_mm': 5.482,
     'rpm': 20,
-    'p0': 0.0,      # T0 estacionamento (mm)
-    'l0': 0.0,      # T0 alvo (mm, medir)
-    'p1': 256.5,    # T1 estacionamento (mm)
-    'l1': 444.5,    # T1 alvo (mm) - final da mangueira, não o bico
+    # Geometria (mm a partir da saída de cada extrusora):
+    #   T0: tubo 540 até o hub | T1: tubo 470 até o hub
+    #   hub 90 mm, troca aos 45 mm | tubo final 50 mm até o hotend
+    #   estacionamento = 10 mm antes do ponto de troca; alvo = fim do tubo final (não o bico)
+    'p0': 575.0,    # T0 estacionamento: 540 + 45 - 10
+    'l0': 680.0,    # T0 alvo: 540 + 90 + 50
+    'p1': 505.0,    # T1 estacionamento: 470 + 45 - 10
+    'l1': 610.0,    # T1 alvo: 470 + 90 + 50
     'native_change_feed': 300,
     'minimum_hotend_c': 180,
     'initial_tool': 'T0',   # T0 | T1 | none
     'profile': 'vyper',     # arquivo profiles/<nome>.json
+    'color_t0': '#FFFFFF',  # cor do filamento carregado em cada porta (para o mapeamento multicolor)
+    'color_t1': '#000000',
 }
 INTS = ('printer_baud', 'mmu_baud', 'rpm', 'native_change_feed', 'minimum_hotend_c')
 FLOATS = ('steps_mm', 'p0', 'l0', 'p1', 'l1')
@@ -64,6 +70,7 @@ def load_profile(name='vyper'):
 
 def list_profiles():
     return sorted(f.stem for f in PROFILE_DIR.glob('*.json'))
+BAMBU_CODES = {'M620', 'M621', 'M622', 'M623', 'M1002'}
 RUNNING_STATES = ('preflight', 'connecting', 'running', 'paused')
 
 
@@ -99,6 +106,10 @@ def normalize(raw):
     s['mmu_port'] = str(s['mmu_port']).strip()
     if s['initial_tool'] not in TOOLS + ('none',):
         raise ValueError('Estado inicial inválido')
+    for k in ('color_t0', 'color_t1'):
+        s[k] = str(s[k]).strip().upper()
+        if not re.fullmatch(r'#[0-9A-F]{6}', s[k]):
+            raise ValueError(f'Cor inválida em {k}')
     s['profile'] = str(s['profile']).strip()
     load_profile(s['profile'])
     if not (0 < s['steps_mm'] <= 500 and 1 <= s['rpm'] <= 60 and s['native_change_feed'] > 0
@@ -127,7 +138,7 @@ def build_config(s, confirm=False):
     return c
 
 
-_LAYER_CHANGE = re.compile(r';\s*LAYER_CHANGE\b', re.I)     # PrusaSlicer / Orca / SuperSlicer
+_LAYER_CHANGE = re.compile(r';\s*(?:LAYER_CHANGE|CHANGE_LAYER)\b', re.I)     # PrusaSlicer / Orca / SuperSlicer
 _LAYER_NUM = re.compile(r';\s*LAYER\s*:\s*-?\d+', re.I)      # Cura
 
 
@@ -147,6 +158,8 @@ def prepare(lines, strip_codes=()):
         if raw.startswith('N') or '*' in raw:
             raise ValueError(f'Linha {idx}: use arquivo G-code sem numeração/checksum')
         code = re.match(r'[A-Z]\d*', raw)
+        if code and code.group() in BAMBU_CODES:
+            raise ValueError(f'Linha {idx}: G-code da Bambu Lab ({code.group()}). Use "Analisar / converter" para adaptar à Vyper')
         if code and code.group() in strip:
             stripped[code.group()] += 1
             continue

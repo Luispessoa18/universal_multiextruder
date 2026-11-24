@@ -42,6 +42,11 @@ pre{margin:0;background:var(--code);border-radius:8px;padding:10px;height:320px;
 .files li span{flex:1;overflow-wrap:anywhere;cursor:pointer}
 .files small{color:var(--mut)}
 .warn{color:var(--warn);font-size:13px}
+.sw{width:28px;height:28px;border-radius:6px;border:1px solid var(--line);flex:none}
+.fil{display:flex;gap:10px;align-items:center;padding:8px;border-radius:8px;background:var(--code)}
+.fil .grow{flex:1;min-width:0;overflow-wrap:anywhere}
+.fil select{width:auto}
+input[type=color]{width:44px;height:32px;padding:2px}
 #msg{min-height:1.4em;font-size:14px}
 #msg.err{color:var(--bad)}#msg.ok{color:var(--ok)}
 </style>
@@ -100,11 +105,41 @@ pre{margin:0;background:var(--code);border-radius:8px;padding:10px;height:320px;
     <div id="msg"></div>
     <h2 style="margin-top:16px">Arquivos</h2>
     <div class="row">
-      <input type="file" id="upload" accept=".gcode,.gco,.gc,.g" style="flex:1">
+      <input type="file" id="upload" accept=".gcode,.gco,.gc,.g,.3mf" style="flex:1">
       <button id="btnUpload">Enviar</button>
     </div>
     <div class="bar" id="upbar" style="height:6px;margin-top:6px;display:none"><div></div></div>
     <ul class="files" id="files"></ul>
+  </section>
+
+  <section class="card wide" id="mcCard" style="display:none">
+    <div class="row" style="justify-content:space-between;margin-bottom:12px">
+      <h2 style="margin:0">Multicolor · converter para Vyper</h2>
+      <button id="mcClose">Fechar</button>
+    </div>
+    <div class="row" style="align-items:flex-start;gap:16px">
+      <img id="mcThumb" alt="" style="width:150px;height:150px;object-fit:contain;background:var(--code);border-radius:8px;display:none">
+      <div style="flex:1;min-width:220px;display:grid;gap:8px">
+        <div id="mcInfo"></div>
+        <label class="f" id="mcPlateWrap" style="max-width:220px">Placa <select id="mcPlate"></select></label>
+      </div>
+    </div>
+    <h2 style="margin-top:16px">Filamento carregado em cada porta</h2>
+    <div class="row">
+      <label class="row" style="gap:6px">T0 · impressora <input type="color" id="colT0"></label>
+      <label class="row" style="gap:6px">T1 · Arduino <input type="color" id="colT1"></label>
+      <button id="mcSuggest">Sugerir pela cor mais próxima</button>
+    </div>
+    <h2 style="margin-top:16px">Cores do arquivo → porta</h2>
+    <div id="mcFils" style="display:grid;gap:6px"></div>
+    <div id="mcChanges" style="margin:10px 0;font-size:14px"></div>
+    <label class="row" style="font-size:14px"><input type="checkbox" id="mcCenter" checked> Centralizar na mesa da Vyper</label>
+    <div class="row" style="margin-top:12px">
+      <button id="btnConvert" class="pri">Converter para Vyper</button>
+      <span id="mcState" style="font-size:14px"></span>
+    </div>
+    <p class="warn">O modo real ainda bloqueia T1 com movimento + extrusão (as placas não estão sincronizadas). Com cores em T1, use a simulação. Para imprimir já, mapeie todas as cores para T0.</p>
+    <div id="mcResult" style="font-size:14px"></div>
   </section>
 
   <section class="card wide">
@@ -225,17 +260,19 @@ async function poll(){
 
 function renderFiles(list){
   files=list;const sel=$('fileSel'),cur=sel.value;sel.innerHTML='';
-  for(const f of files){const o=document.createElement('option');o.value=o.textContent=f.name;sel.appendChild(o)}
+  for(const f of files){if(/\.3mf$/i.test(f.name))continue;const o=document.createElement('option');o.value=o.textContent=f.name;sel.appendChild(o)}
   if(files.some(f=>f.name===cur))sel.value=cur;
   const ul=$('files');ul.innerHTML='';
   if(!files.length){const li=document.createElement('li');li.textContent='Nenhum arquivo enviado.';ul.appendChild(li)}
   for(const f of files){
     const li=document.createElement('li');if(f.name===sel.value)li.className='sel';
-    const n=document.createElement('span');n.textContent=f.name;n.onclick=()=>{sel.value=f.name;renderFiles(files)};
+    const n=document.createElement('span');n.textContent=f.name;n.onclick=()=>{if(/\.3mf$/i.test(f.name))analyze(f.name);else{sel.value=f.name;renderFiles(files)}};
     const sm=document.createElement('small');sm.textContent=size(f.size)+' · '+new Date(f.mtime*1000).toLocaleString();
+    const an=document.createElement('button');an.textContent=/\.3mf$/i.test(f.name)?'Analisar / converter':'Cores';
+    an.onclick=()=>analyze(f.name);
     const del=document.createElement('button');del.textContent='Excluir';
     del.onclick=async()=>{if(!confirm('Excluir '+f.name+'?'))return;try{renderFiles((await api('/api/files/'+encodeURIComponent(f.name),{method:'DELETE'})).files)}catch(e){say(e.message,'err')}};
-    li.append(n,sm,del);ul.appendChild(li);
+    li.append(n,sm,an,del);ul.appendChild(li);
   }
   updateButtons();
 }
@@ -250,7 +287,9 @@ $('btnUpload').onclick=()=>{
   x.upload.onprogress=e=>{if(e.lengthComputable)bar.firstElementChild.style.width=(100*e.loaded/e.total)+'%'};
   x.onload=()=>{bar.style.display='none';let d={};try{d=JSON.parse(x.responseText)}catch(_){}
     if(x.status>=400){say(d.error||'Falha no envio','err');return}
-    $('upload').value='';renderFiles(d.files);$('fileSel').value=d.name;renderFiles(d.files);say('Enviado: '+d.name,'ok')};
+    $('upload').value='';renderFiles(d.files);
+    if(/\.3mf$/i.test(d.name)){say('Enviado: '+d.name+' — analisando cores...','ok');analyze(d.name)}
+    else{$('fileSel').value=d.name;renderFiles(d.files);say('Enviado: '+d.name,'ok')}};
   x.onerror=()=>{bar.style.display='none';say('Falha de rede no envio','err')};
   x.send(fd);
 };
@@ -268,8 +307,8 @@ function buildForm(){
     el.name=k;l.appendChild(el);form.appendChild(l);
   }
 }
-async function loadSettings(){const d=await api('/api/settings');for(const [k] of FIELDS)$('settings').elements[k].value=d.settings[k]}
-async function saveSettings(){const body={};for(const [k] of FIELDS)body[k]=$('settings').elements[k].value;return post('/api/settings',body)}
+async function loadSettings(){const d=await api('/api/settings');for(const [k] of FIELDS)$('settings').elements[k].value=d.settings[k];$('colT0').value=d.settings.color_t0.toLowerCase();$('colT1').value=d.settings.color_t1.toLowerCase()}
+async function saveSettings(){const body={};for(const [k] of FIELDS)body[k]=$('settings').elements[k].value;body.color_t0=$('colT0').value;body.color_t1=$('colT1').value;return post('/api/settings',body)}
 async function loadPorts(){
   try{const d=await api('/api/ports');const dl=$('portlist');dl.innerHTML='';
     for(const p of d.ports){const o=document.createElement('option');o.value=p.device;o.label=p.description;dl.appendChild(o)}
@@ -325,6 +364,67 @@ $('btnInfo').onclick=async()=>{
     $('infoRaw').textContent=d.lines.join('\n');say('Configuração da impressora lida','ok')}
   catch(e){say(e.message,'err')}
   finally{b.textContent='Ler da impressora (M115 / M503)';updateButtons()}
+};
+
+// --- multicolor -------------------------------------------------------------
+let mc=null,mcMap={};
+const rgb=h=>[1,3,5].map(i=>parseInt(h.slice(i,i+2),16));
+function cdist(a,b){const[r1,g1,b1]=rgb(a),[r2,g2,b2]=rgb(b),rm=(r1+r2)/2;return(2+rm/256)*(r1-r2)**2+4*(g1-g2)**2+(2+(255-rm)/256)*(b1-b2)**2}
+function suggest(){const pl=mcPlate();if(!pl)return;const c0=$('colT0').value,c1=$('colT1').value;
+  for(const f of pl.filaments)mcMap[f.index]=cdist(f.color,c0)<=cdist(f.color,c1)?'T0':'T1';renderMc()}
+function mcPlate(){return mc&&mc.plates.find(p=>String(p.plate)===$('mcPlate').value)}
+function countChanges(seq){let c=0,prev=null;for(const n of seq){const m=mcMap[n];if(prev!==null&&m!==prev)c++;prev=m}return c}
+function renderMc(){
+  const pl=mcPlate();if(!pl)return;
+  const th=$('mcThumb');if(pl.thumbnail){th.src='/api/thumb?file='+encodeURIComponent(mc.file)+'&plate='+pl.plate;th.style.display=''}else th.style.display='none';
+  $('mcInfo').textContent='';
+  const info=[['Arquivo',mc.file],['Origem',pl.printer||(pl.bambu?'Bambu Lab':'desconhecida')],['Camadas',pl.layers||'—'],['Cores usadas',pl.filaments.length+(pl.multicolor?' (multicolor)':' (uma cor)')],['Trocas no arquivo',pl.changes]];
+  for(const [k,v] of info){const d=document.createElement('div');const b=document.createElement('b');b.textContent=k+': ';d.append(b,String(v));$('mcInfo').appendChild(d)}
+  const box=$('mcFils');box.innerHTML='';
+  for(const f of pl.filaments){
+    if(!mcMap[f.index])mcMap[f.index]='T0';
+    const row=document.createElement('div');row.className='fil';
+    const sw=document.createElement('div');sw.className='sw';sw.style.background=f.color;
+    const t=document.createElement('div');t.className='grow';t.textContent='Filamento '+(f.index+1)+' · '+(f.type||'?')+' · '+f.color+(f.used_g?' · '+f.used_g.toFixed(1)+' g':'');
+    const arrow=document.createElement('span');arrow.textContent='→';
+    const sel=document.createElement('select');
+    for(const [v,l] of [['T0','T0 · impressora'],['T1','T1 · Arduino']]){const o=document.createElement('option');o.value=v;o.textContent=l;sel.appendChild(o)}
+    sel.value=mcMap[f.index];sel.onchange=()=>{mcMap[f.index]=sel.value;renderMc()};
+    const dst=document.createElement('div');dst.className='sw';dst.style.background=mcMap[f.index]==='T0'?$('colT0').value:$('colT1').value;dst.title='cor carregada na porta';
+    row.append(sw,t,arrow,sel,dst);box.appendChild(row);
+  }
+  const after=countChanges(pl.sequence);
+  const ports=new Set(pl.filaments.map(f=>mcMap[f.index]));
+  $('mcChanges').textContent=pl.filaments.length+' cores → '+ports.size+' porta(s) · trocas: '+pl.changes+' no arquivo → '+after+' após o mapeamento';
+}
+async function analyze(name){
+  $('mcCard').style.display='';$('mcState').textContent='Analisando...';$('mcResult').textContent='';$('mcFils').innerHTML='';$('mcInfo').textContent='';
+  $('mcCard').scrollIntoView({behavior:'smooth',block:'start'});
+  try{mc=await api('/api/analyze?file='+encodeURIComponent(name));mcMap={};
+    const ps=$('mcPlate');ps.innerHTML='';for(const p of mc.plates){const o=document.createElement('option');o.value=p.plate;o.textContent='Placa '+p.plate+' ('+p.filaments.length+' cores)';ps.appendChild(o)}
+    $('mcPlateWrap').style.display=mc.plates.length>1?'':'none';$('mcState').textContent='';suggest()}
+  catch(e){mc=null;$('mcState').textContent='';$('mcResult').textContent=e.message;$('mcResult').style.color='var(--bad)'}
+}
+$('mcPlate').onchange=()=>{mcMap={};suggest()};
+$('mcSuggest').onclick=suggest;
+$('colT0').onchange=$('colT1').onchange=()=>{renderMc();saveSettings().catch(()=>{})};
+$('mcClose').onclick=()=>{$('mcCard').style.display='none'};
+$('btnConvert').onclick=async()=>{
+  const pl=mcPlate();if(!pl)return;const b=$('btnConvert');b.disabled=true;$('mcResult').textContent='';$('mcResult').style.color='';
+  try{await post('/api/convert',{file:mc.file,plate:pl.plate,mapping:mcMap,center:$('mcCenter').checked});
+    let st;do{await new Promise(r=>setTimeout(r,800));st=await api('/api/convert');$('mcState').textContent=st.message||''}while(st.state==='running');
+    if(st.state==='error'){$('mcResult').textContent=st.message;$('mcResult').style.color='var(--bad)';return}
+    const r=st.result,box=$('mcResult');box.innerHTML='';
+    const add=(t,c)=>{const d=document.createElement('div');d.textContent=t;if(c)d.style.color=c;box.appendChild(d)};
+    add('✓ '+r.output+' criado — selecionado em "Arquivo" para simular.','var(--ok)');
+    add('Trocas: '+r.changes_original+' no original → '+r.changes_kept+' mantidas ('+r.changes_merged+' eliminadas pelo mapeamento)');
+    add('Temperaturas iniciais: bico '+r.hotend+' °C · mesa '+r.bed+' °C · arcos convertidos: '+r.arcs);
+    add('Deslocamento XY: '+r.offset.join(' / ')+' mm · área ocupada: X '+r.bbox[0]+'–'+r.bbox[2]+' · Y '+r.bbox[1]+'–'+r.bbox[3]);
+    const dr=Object.entries(r.dropped);if(dr.length)add('Removidos (não existem na Vyper): '+dr.map(([k,v])=>k+'×'+v).join(', '));
+    for(const w of r.warnings)add('⚠ '+w,'var(--warn)');
+    const d=await api('/api/files');renderFiles(d.files);$('fileSel').value=r.output;renderFiles(d.files);
+  }catch(e){$('mcResult').textContent=e.message;$('mcResult').style.color='var(--bad)'}
+  finally{b.disabled=false}
 };
 
 (async()=>{
